@@ -1,7 +1,19 @@
 # Deployment
 
 Lead-response and site-visit booking assistant for Company A (Isocode Labs take-home).
+
+- **Live app:** https://isocode-labs-real-estate-management.vercel.app
+- **Staff sign-in:** https://isocode-labs-real-estate-management.vercel.app/login
+- **Code:** https://github.com/Sakshibeloshe/Isocode_labs_Real_estate-management
+
 Stack: Next.js 16 (App Router) · TypeScript · Tailwind 4 · PostgreSQL + Prisma 6 · Groq (Qwen) through an OpenAI-compatible API · Vitest.
+
+## Try it in 2 minutes
+
+1. Open the live app → **Project 1** → **Start chat**.
+2. Ask "When is possession?", then give a name and a 10-digit mobile and ask to visit → tap a time → **Confirm visit** → you get a visit pass with map, calendar file and change/cancel link.
+3. Ask "What are the maintenance charges?" (not on the fact sheet) → handed to a named executive. Ask "Any discount?" → fixed reply + handoff.
+4. Sign in at `/login` as `head@companya.test` → your test lead is under **Leads → Needs action**, its visit under **Visits**, its reminders under **Messages**, and the flags under **Review chats**.
 
 ## Demo logins
 
@@ -82,19 +94,28 @@ If the model is down, slow (over 10 s) or rate-limited, buyers see a short "leav
 
 ## How it is deployed
 
-**Vercel** (Next.js hosting) + **Neon** (serverless Postgres), both on free tiers. Use an India region where available (Neon `aws-ap-south-1` Mumbai; Vercel function region `bom1`).
+| Piece | Where | Plan |
+|---|---|---|
+| App (pages, API, server actions) | **Vercel**, project `isocode-labs-real-estate-management`, deploys on every push to `main` | Hobby (free) |
+| Database | **Neon** Postgres, AWS Asia Pacific (Singapore) `ap-southeast-1`, branch `production`, database `neondb` | Free |
+| AI model | **Groq**, `qwen/qwen3.8-27b` | Free tier |
+| Vercel function region | Singapore (`sin1`), next to the database | |
 
-1. Push the repo to GitHub, then **Import Project** in Vercel. Defaults are fine: the build command is `npm run build`, which runs `prisma generate` then `next build`.
-2. In Vercel → Settings → Environment Variables, add the variables below.
-3. From your machine, with `DATABASE_URL` pointing at the production database:
+Steps taken (repeatable for a fresh deployment):
+
+1. **Neon:** created the project in Singapore, the region closest to Ahmedabad that the free plan offered. Copied the connection string with **connection pooling off** (Prisma migrations need a direct connection).
+2. **Database:** from a laptop, with that string as `DATABASE_URL` in `.env`:
 
    ```bash
-   npx prisma migrate deploy
-   npm run db:seed
+   npx prisma migrate deploy   # creates tables + the capacity CHECK and one-live-visit index
+   npm run db:seed             # demo data and logins (run once)
    ```
 
-4. Deploy, then set `APP_URL` to the deployment URL so SMS links point to it, and redeploy.
-5. Reminders: `vercel.json` registers a daily cron on `/api/cron/reminders`. The Hobby plan only allows daily crons, so due reminders are also dispatched whenever a staff page loads. In production, a 5-minute scheduler would call the same endpoint.
+3. **Vercel:** imported the GitHub repo (preset Next.js; build command left as default, `npm run build`, which runs `prisma generate && next build`), then added the environment variables below with **Import .env**. `TEST_DATABASE_URL` is removed and `APP_URL` is set to the live URL.
+4. Set **Settings → Functions → Region** to Singapore (`sin1`) and redeployed.
+5. **Reminders:** `vercel.json` registers a daily cron on `/api/cron/reminders`, and Vercel sends `CRON_SECRET` as the bearer token. The Hobby plan only allows daily crons, so due reminders are also dispatched whenever a staff page loads. In production, a 5-minute scheduler would call the same endpoint.
+
+Updating: push to `main` and Vercel rebuilds. A schema change needs `npx prisma migrate deploy` against Neon before (or with) the deploy.
 
 ### Environment variables (names only)
 
@@ -120,3 +141,5 @@ No secrets are committed: `.env*` is git-ignored except `.env.example`, which ho
 - Messages (SMS, reminders) are **simulated**: they are written to an outbox you can read under Staff → Messages, and on each lead.
 - Portal and ad leads would arrive by forwarded email (Release 1 in the PRD). The demo uses **Add a lead** for that intake; the same duplicate check runs either way.
 - Windows: if `npm install` is slow or files lock, the project folder may be inside OneDrive. Pause sync or move it outside OneDrive.
+- **`P1001: Can't reach database server` locally:** some Indian ISPs (seen on Jio) refuse DNS lookups for `*.neon.tech`. Check with `Resolve-DnsName <host>`; if it says "DNS operation refused", switch the PC's DNS to `1.1.1.1` / `8.8.8.8` (or use a hotspot or Cloudflare WARP). The deployed app isn't affected.
+- If the chat shows the "leave your number" form on every message, the Groq key is missing or invalid: check `LLM_API_KEY` and Vercel → Logs.
