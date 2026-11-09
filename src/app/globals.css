@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+/* Tokens: lime-plaster paper, slate ink, Gujarat indigo as the single accent */
+@theme {
+  --color-paper: #f3f4f0;
+  --color-surface: #fbfbf9;
+  --color-ink: #1f262b;
+  --color-ink-2: #4c5650;
+  --color-ink-3: #78817b;
+  --color-line: #d9dcd6;
+  --color-line-2: #e7e9e4;
+  --color-indigo: #2b3770;
+  --color-indigo-2: #3d4b8c;
+  --color-indigo-soft: #e7e9f2;
+  --color-sage: #4e6e59;
+  --color-sage-soft: #e5ece6;
+  --color-amber: #8a5a12;
+  --color-amber-soft: #f4ecdc;
+  --color-rose: #9b3434;
+  --color-rose-soft: #f5e4e2;
+
+  --font-sans: var(--font-anek-latin), var(--font-anek-gu), var(--font-anek-hi), ui-sans-serif, system-ui, sans-serif;
+
+  --radius-card: 14px;
+  --radius-ctl: 10px;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.5;
+    font-feature-settings: "kern";
+    -webkit-font-smoothing: antialiased;
+  }
+  /* Hindi and Gujarati need a little more line height for matras */
+  :lang(hi),
+  :lang(gu) {
+    line-height: 1.65;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-indigo);
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+  ::selection {
+    background: var(--color-indigo-soft);
+  }
+}
+
+@utility wide {
+  font-stretch: 125%;
+  font-variation-settings: "wdth" 125;
+}
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* one entrance only: new chat messages settle in */
+@keyframes settle {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.settle {
+  animation: settle 220ms ease-out both;
+}
+@keyframes dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+.typing-dot {
+  animation: dot 1.2s infinite ease-in-out;
+}
