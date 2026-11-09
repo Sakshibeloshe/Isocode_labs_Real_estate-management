@@ -1,0 +1,412 @@
+// Data model for the lead-response + site-visit assistant.
+// Times stored in UTC; shown in IST (Asia/Kolkata).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  EXECUTIVE
+  SALES_HEAD
+}
+
+enum Language {
+  EN
+  HI
+  GU
+}
+
+enum LeadSource {
+  PORTAL
+  SOCIAL_AD
+  WEBSITE
+  HOARDING
+}
+
+enum LeadStatus {
+  NEW
+  ENGAGED
+  VISIT_BOOKED
+  VISITED
+  HANDED_OFF
+  CLOSED
+}
+
+enum DupStatus {
+  NONE
+  POSSIBLE // similar name + project, different phone: exec decides
+  LINKED // confirmed same person
+  DISMISSED // exec said not a duplicate
+}
+
+enum VisitStatus {
+  HELD // 10 min hold while buyer confirms
+  BOOKED
+  VISITED
+  NO_SHOW
+  CANCELLED
+  EXPIRED // hold lapsed
+}
+
+enum BookedVia {
+  AI_CHAT
+  SLOT_PICKER
+  STAFF
+}
+
+enum ConversationStatus {
+  ACTIVE
+  HANDED_OFF
+}
+
+enum MessageRole {
+  BUYER
+  ASSISTANT
+  SYSTEM
+}
+
+enum Channel {
+  SMS
+  EMAIL
+  INTERNAL
+}
+
+enum OutboxKind {
+  FIRST_TOUCH
+  CONFIRMATION
+  REMINDER_24H
+  REMINDER_2H
+  CANCELLATION
+  HANDOFF_ALERT
+}
+
+enum OutboxStatus {
+  SCHEDULED
+  SENT
+  SKIPPED
+  CANCELLED
+}
+
+enum FlagReason {
+  OUTPUT_BLOCKED
+  MISSING_FACT
+  DISCOUNT_REQUEST
+  INJECTION
+  DISTRESS
+  AI_ERROR
+}
+
+enum FlagVerdict {
+  PENDING
+  FINE
+  FIX_FACT_SHEET
+  FIX_BEHAVIOUR
+}
+
+enum FactTag {
+  RERA_REGISTERED
+  MARKETING
+}
+
+model User {
+  id           String     @id @default(cuid())
+  name         String
+  email        String     @unique
+  passwordHash String
+  role         Role
+  languages    Language[]
+  active       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+
+  projects     ExecutiveProject[]
+  ownedLeads   Lead[]             @relation("LeadOwner")
+  hostedVisits Visit[]            @relation("VisitHost")
+  handoffs     Handoff[]
+  auditLogs    AuditLog[]
+}
+
+model Project {
+  id          String  @id // "P1", "P2"
+  name        String
+  locality    String
+  address     String
+  mapUrl      String
+  reraNumber  String
+  bhkOptions  String[]
+
+  executives    ExecutiveProject[]
+  slotTemplates SlotTemplate[]
+  slots         Slot[]
+  facts         Fact[]
+  leads         Lead[]
+}
+
+model ExecutiveProject {
+  userId    String
+  projectId String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([userId, projectId])
+}
+
+model Lead {
+  id              String     @id // "LD-58210"
+  name            String?
+  phone           String? // as entered, display only
+  phoneKey        String? // last 10 digits, used for duplicate match
+  email           String? // lower-cased
+  language        Language   @default(EN)
+  source          LeadSource // first-touch source, used for cost per visit
+  projectId       String?
+  bhk             String?
+  budget          String?
+  timeline        String?
+  status          LeadStatus @default(NEW)
+  closedReason    String?
+  ownerId         String?
+  consentAt       DateTime?
+  optedOutAt      DateTime?
+  firstResponseAt DateTime? // first reply/message sent to buyer
+  reachedAt       DateTime? // buyer replied or exec logged contact
+  summary         String?
+  duplicateOfId   String?
+  dupStatus       DupStatus  @default(NONE)
+  dupReason       String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  project       Project?       @relation(fields: [projectId], references: [id])
+  owner         User?          @relation("LeadOwner", fields: [ownerId], references: [id])
+  duplicateOf   Lead?          @relation("Duplicates", fields: [duplicateOfId], references: [id])
+  duplicates    Lead[]         @relation("Duplicates")
+  touches       LeadTouch[]
+  conversations Conversation[]
+  visits        Visit[]
+  handoffs      Handoff[]
+  outbox        Outbox[]
+  flags         Flag[]
+
+  @@index([phoneKey])
+  @@index([email])
+  @@index([createdAt])
+  @@index([ownerId, status])
+}
+
+// every time a lead arrives from a source; a lead can have many
+model LeadTouch {
+  id        String     @id @default(cuid())
+  leadId    String
+  source    LeadSource
+  campaign  String?
+  note      String?
+  createdAt DateTime   @default(now())
+  lead      Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+}
+
+model Conversation {
+  id             String             @id @default(cuid())
+  token          String             @unique // buyer cookie secret
+  leadId         String?
+  projectId      String?
+  language       Language           @default(EN)
+  status         ConversationStatus @default(ACTIVE)
+  consentAt      DateTime?
+  offeredSlotIds String[] // slots shown to buyer; book_visit must pick one of these
+  aiFailures     Int                @default(0)
+  createdAt      DateTime           @default(now())
+  lastActivityAt DateTime           @default(now())
+
+  lead     Lead?     @relation(fields: [leadId], references: [id])
+  messages Message[]
+  flags    Flag[]
+  handoffs Handoff[]
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  card           Json? // UI card: slots / hold / confirmed / handoff / fallback
+  createdAt      DateTime    @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+// weekly pattern the sales head edits; real slots generated from it
+model SlotTemplate {
+  id          String  @id @default(cuid())
+  projectId   String
+  weekday     Int // 0 = Sunday
+  startMinute Int // minutes after midnight IST
+  durationMin Int     @default(60)
+  capacity    Int
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, weekday, startMinute])
+}
+
+model Slot {
+  id          String   @id @default(cuid())
+  projectId   String
+  startsAt    DateTime
+  durationMin Int      @default(60)
+  capacity    Int
+  reserved    Int      @default(0) // held + booked; CHECK reserved <= capacity in migration
+  closed      Boolean  @default(false)
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  visits      Visit[]
+
+  @@unique([projectId, startsAt])
+  @@index([projectId, startsAt])
+}
+
+model Visit {
+  id            String      @id @default(cuid())
+  leadId        String
+  slotId        String
+  projectId     String
+  status        VisitStatus
+  holdExpiresAt DateTime?
+  executiveId   String?
+  manageToken   String      @unique // buyer link to view/reschedule/cancel
+  bookedVia     BookedVia
+  outcomeAt     DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  lead      Lead     @relation(fields: [leadId], references: [id])
+  slot      Slot     @relation(fields: [slotId], references: [id])
+  executive User?    @relation("VisitHost", fields: [executiveId], references: [id])
+  outbox    Outbox[]
+
+  @@index([leadId, status])
+  @@index([status, holdExpiresAt])
+}
+
+// mocked SMS/email; reminders sit here as SCHEDULED until due
+model Outbox {
+  id        String       @id @default(cuid())
+  leadId    String
+  visitId   String?
+  channel   Channel
+  kind      OutboxKind
+  to        String
+  body      String
+  sendAt    DateTime
+  status    OutboxStatus @default(SCHEDULED)
+  note      String?
+  sentAt    DateTime?
+  createdAt DateTime     @default(now())
+
+  lead  Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  visit Visit? @relation(fields: [visitId], references: [id])
+
+  @@index([status, sendAt])
+  @@index([leadId])
+}
+
+model Handoff {
+  id             String    @id @default(cuid())
+  leadId         String
+  conversationId String?
+  executiveId    String
+  reason         String
+  summary        String
+  acknowledgedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  lead         Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id])
+  executive    User          @relation(fields: [executiveId], references: [id])
+
+  @@index([executiveId, acknowledgedAt])
+}
+
+model Flag {
+  id             String      @id @default(cuid())
+  conversationId String
+  leadId         String?
+  reason         FlagReason
+  detail         String
+  excerpt        String?
+  verdict        FlagVerdict @default(PENDING)
+  reviewedById   String?
+  reviewedAt     DateTime?
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  lead         Lead?        @relation(fields: [leadId], references: [id])
+
+  @@index([verdict, createdAt])
+}
+
+model Fact {
+  id          String   @id @default(cuid())
+  projectId   String? // null = applies to all projects
+  key         String
+  label       String
+  valueEn     String
+  valueHi     String?
+  valueGu     String?
+  tag         FactTag
+  published   Boolean  @default(true)
+  version     Int      @default(1)
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+
+  project   Project?       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  revisions FactRevision[]
+
+  @@unique([projectId, key])
+}
+
+model FactRevision {
+  id         String   @id @default(cuid())
+  factId     String
+  version    Int
+  valueEn    String
+  valueHi    String?
+  valueGu    String?
+  editedById String?
+  createdAt  DateTime @default(now())
+  fact       Fact     @relation(fields: [factId], references: [id], onDelete: Cascade)
+
+  @@index([factId])
+}
+
+model SpendEntry {
+  id        String     @id @default(cuid())
+  source    LeadSource
+  month     String // "2026-11"
+  amountInr Int
+
+  @@unique([source, month])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String
+  detail    Json?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([entity, entityId])
+}
+
+model Counter {
+  name  String @id
+  value Int
+}
